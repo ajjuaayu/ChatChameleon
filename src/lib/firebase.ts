@@ -22,13 +22,14 @@ import { getDatabase } from "firebase/database";
 // Ensure you use the correct one provided by your Firebase project settings.
 //
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY", // REPLACE THIS with your actual apiKey
-  authDomain: "YOUR_AUTH_DOMAIN", // REPLACE THIS e.g., your-project-id.firebaseapp.com
-  databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com", // REPLACE THIS e.g., https://your-project-id-default-rtdb.firebaseio.com
-  projectId: "YOUR_PROJECT_ID", // REPLACE THIS e.g., your-project-id
-  storageBucket: "YOUR_STORAGE_BUCKET", // REPLACE THIS e.g., your-project-id.appspot.com
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID", // REPLACE THIS e.g., 123456789012
-  appId: "YOUR_APP_ID" // REPLACE THIS e.g., 1:123456789012:web:abcdef1234567890abcdef
+  apiKey: "AIzaSyCpfwRS03gBaRoF_5HuLsDmOgbHBvUIZTU",
+  authDomain: "chatchameleon-efe35.firebaseapp.com",
+  databaseURL: "https://chatchameleon-efe35-default-rtdb.firebaseio.com", // Added based on projectId
+  projectId: "chatchameleon-efe35",
+  storageBucket: "chatchameleon-efe35.appspot.com", // Corrected from firebasestorage.app
+  messagingSenderId: "1028835741426",
+  appId: "1:1028835741426:web:ef1e6aaf7a30aad15b4a6b",
+  measurementId: "G-W4K41098XQ"
 };
 
 // Initialize Firebase
