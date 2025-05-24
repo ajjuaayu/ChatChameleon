@@ -89,7 +89,7 @@ export default function HomePage() {
   };
 
   return (
-    <main className="flex flex-col items-center justify-center min-h-screen p-4">
+    <main className={`flex flex-col items-center min-h-screen ${connectionStatus === 'connected' ? 'p-0 sm:p-4' : 'p-4 justify-center'}`}>
       {renderContent()}
     </main>
   );

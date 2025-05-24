@@ -32,7 +32,7 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
         scrollViewport.scrollTop = scrollViewport.scrollHeight;
       }
     }
-  }, [messages, isPartnerTyping]); // Scroll on new message or typing status change
+  }, [messages, isPartnerTyping]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,7 +53,7 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
   };
 
   return (
-    <Card className="w-full max-w-2xl h-[70vh] flex flex-col shadow-xl rounded-lg">
+    <Card className="w-full sm:max-w-3xl flex-grow flex flex-col shadow-xl sm:rounded-lg overflow-hidden">
       <CardHeader className="flex flex-row items-center justify-between p-4 border-b">
         <div className="flex items-center gap-2">
           <UserCircle className="w-8 h-8 text-primary" />
