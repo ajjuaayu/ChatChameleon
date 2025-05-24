@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { database } from '@/lib/firebase';
 import { ref, onValue, set, push, serverTimestamp, query, orderByChild, equalTo, limitToFirst, remove, onDisconnect, get, update, type DatabaseReference } from 'firebase/database';
 import type { ChatMessage, ChatSession, ConnectionStatus } from '@/types';
+import { getRandomName } from '@/lib/temporary-names';
 
 const SESSIONS_PATH = 'chat_sessions';
 const TYPING_TIMEOUT_DURATION = 3000; // 3 seconds
@@ -34,12 +35,16 @@ export function useChatSession() {
   const [error, setError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [isPartnerTyping, setIsPartnerTyping] = useState<boolean>(false);
+  
+  const [myAlias, setMyAlias] = useState<string | null>(null);
+  const [partnerAlias, setPartnerAlias] = useState<string | null>(null);
 
   const unsubscribeSessionRef = useRef<(() => void) | null>(null);
   const unsubscribeMessagesRef = useRef<(() => void) | null>(null);
   const activeSessionDbRefForDisconnect = useRef<DatabaseReference | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const userTypingRefForDisconnect = useRef<DatabaseReference | null>(null);
+  const userAliasRefForConnect = useRef<string | null>(null);
 
 
   useEffect(() => {
@@ -96,6 +101,9 @@ export function useChatSession() {
     setError(null);
     setIsConnecting(false);
     setIsPartnerTyping(false);
+    setMyAlias(null); // Reset alias
+    setPartnerAlias(null); // Reset partner alias
+    userAliasRefForConnect.current = null;
   }, []);
 
 
@@ -116,6 +124,11 @@ export function useChatSession() {
     setConnectionStatus('connecting');
     setError(null);
 
+    const newGeneratedAlias = getRandomName();
+    setMyAlias(newGeneratedAlias); // Set alias for immediate UI update
+    userAliasRefForConnect.current = newGeneratedAlias;
+
+
     const sessionsDbRef = ref(database, SESSIONS_PATH);
     const waitingSessionsQuery = query(
       sessionsDbRef,
@@ -133,14 +146,16 @@ export function useChatSession() {
         for (const sessionIdKey in sessionsData) {
           if (Object.prototype.hasOwnProperty.call(sessionsData, sessionIdKey)) {
             const session = sessionsData[sessionIdKey] as ChatSession;
-            if (session.user1Id !== userId && !session.user2Id) { 
+            // Ensure not joining own session and session is truly waiting for user2
+            if (session.user1Id !== userId && !session.user2Id && session.status === 'waiting') { 
               const sessionToUpdateRef = ref(database, `${SESSIONS_PATH}/${sessionIdKey}`);
               try {
                 await update(sessionToUpdateRef, {
                   user2Id: userId,
+                  user2Name: newGeneratedAlias, // Set user2's name
                   status: 'active',
                   updatedAt: serverTimestamp(),
-                  typing_status: { [userId]: false, [session.user1Id]: false } // Initialize typing status
+                  typing_status: { [userId]: false, [session.user1Id]: false } 
                 });
                 setCurrentSessionId(sessionIdKey); 
                 sessionJoined = true;
@@ -162,10 +177,11 @@ export function useChatSession() {
         
         const newSessionData: Partial<ChatSession> = {
           user1Id: userId,
+          user1Name: newGeneratedAlias, // Set user1's name
           user2Id: null,
           status: 'waiting',
           messages: {},
-          typing_status: { [userId]: false }, // Initialize typing status
+          typing_status: { [userId]: false }, 
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
@@ -178,14 +194,13 @@ export function useChatSession() {
       setError("Connection error: " + err.message);
       setConnectionStatus('error');
       setIsConnecting(false); 
+      setMyAlias(null); // Clear alias on error
     }
   }, [userId, isConnecting, resetState]);
 
   useEffect(() => {
     if (!currentSessionId || !userId) {
-      if (connectionStatus !== 'idle' && connectionStatus !== 'error' && connectionStatus !== 'connecting') {
-        // Potentially reset or set to idle if session is lost without explicit disconnect
-      }
+      // No active session or user, do nothing or ensure state is clean if needed
       return;
     }
 
@@ -194,7 +209,6 @@ export function useChatSession() {
     
     const currentUserTypingFirebaseRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}/typing_status/${userId}`);
     userTypingRefForDisconnect.current = currentUserTypingFirebaseRef;
-
 
     if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
     if (unsubscribeMessagesRef.current) unsubscribeMessagesRef.current();
@@ -207,11 +221,12 @@ export function useChatSession() {
            setError("Chat session ended abruptly.");
         }
         setConnectionStatus('idle');
-        // resetState will be called by disconnect or if currentSessionId becomes null elsewhere
         setCurrentSessionId(null); 
         setChatPartnerId(null);
         setMessages([]);
         setIsPartnerTyping(false);
+        setMyAlias(userAliasRefForConnect.current); // Keep locally generated alias if session disappears early
+        setPartnerAlias(null);
         return;
       }
 
@@ -225,11 +240,25 @@ export function useChatSession() {
         setChatPartnerId(null);
         setMessages([]);
         setIsPartnerTyping(false);
+        setMyAlias(null); 
+        setPartnerAlias(null);
         return;
       }
 
       const partner = sessionData.user1Id === userId ? sessionData.user2Id : sessionData.user1Id;
-      setChatPartnerId(partner); // Set partner ID regardless of status if available
+      setChatPartnerId(partner);
+
+      if (sessionData.user1Id === userId) {
+        setMyAlias(sessionData.user1Name || userAliasRefForConnect.current || 'You');
+        setPartnerAlias(sessionData.user2Name || (partner ? 'Stranger' : null));
+      } else if (sessionData.user2Id === userId) {
+        setMyAlias(sessionData.user2Name || userAliasRefForConnect.current || 'You');
+        setPartnerAlias(sessionData.user1Name || (partner ? 'Stranger' : null));
+      } else {
+        // User is not part of this session, should not happen if logic is correct
+        // Resetting might be too aggressive here, depends on desired behavior
+      }
+
 
       if (sessionData.status === 'active' && partner) {
         setConnectionStatus('connected');
@@ -238,10 +267,12 @@ export function useChatSession() {
       } else if (sessionData.status === 'waiting' && sessionData.user1Id === userId) {
         setConnectionStatus('waiting');
         setIsPartnerTyping(false);
+         setPartnerAlias(null); // No partner yet
       } else if (sessionData.status === 'active' && !partner) {
          console.warn("Session active but partner ID is missing. Reverting to waiting.");
          setConnectionStatus('waiting');
          setIsPartnerTyping(false);
+         setPartnerAlias(null); 
       }
     }, (errorVal) => {
         console.error("Error listening to session:", errorVal);
@@ -268,10 +299,8 @@ export function useChatSession() {
         setError("Error loading messages: " + errorVal.message);
     });
 
-    // Setup onDisconnect listeners
     onDisconnect(currentSessionDbRef).remove().catch(err => console.error("Failed to set onDisconnect(remove) for session:", err));
     onDisconnect(currentUserTypingFirebaseRef).set(false).catch(err => console.warn("Failed to set onDisconnect for typing status:", err));
-
 
     return () => {
       if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
@@ -287,7 +316,7 @@ export function useChatSession() {
         clearTimeout(typingTimeoutRef.current);
       }
     };
-  }, [currentSessionId, userId, connectionStatus]); // Added connectionStatus to re-evaluate if it changes
+  }, [currentSessionId, userId, connectionStatus]);
 
 
   const sendMessage = useCallback(async (text: string) => {
@@ -297,7 +326,7 @@ export function useChatSession() {
       clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = null;
     }
-    setMyTypingStatus(false); // Sent message, so not typing anymore
+    setMyTypingStatus(false); 
 
     const messageData = {
       senderId: userId,
@@ -320,7 +349,7 @@ export function useChatSession() {
   const disconnect = useCallback(async () => {
     const sessionIdToDisconnect = currentSessionId; 
     
-    if (sessionIdToDisconnect && userId) { // Set typing to false before removing session
+    if (sessionIdToDisconnect && userId) { 
         const userTypingFirebaseRef = ref(database, `${SESSIONS_PATH}/${sessionIdToDisconnect}/typing_status/${userId}`);
         try {
             await set(userTypingFirebaseRef, false);
@@ -335,27 +364,31 @@ export function useChatSession() {
     if (sessionIdToDisconnect) {
       const sessionToDisconnectRef = ref(database, `${SESSIONS_PATH}/${sessionIdToDisconnect}`);
       try {
+        // Instead of remove, mark as closed to prevent immediate re-joining issue if one user disconnects
+        // await update(sessionToDisconnectRef, { status: 'closed', updatedAt: serverTimestamp() });
+        // Or just remove if ephemeral is strictly desired. Removing for simplicity now.
         await remove(sessionToDisconnectRef);
       } catch (err: any) {
-        console.error("Error removing session on disconnect: ", err);
+        console.error("Error removing/closing session on disconnect: ", err);
       }
     }
   }, [currentSessionId, userId, resetState]);
   
   useEffect(() => {
     return () => {
-      // General cleanup: if component unmounts and a session might be active,
-      // ensure local state is reset. Firebase onDisconnect should handle DB.
-      // resetState(); // This is now called more specifically.
+      // General cleanup on unmount if hook is somehow destroyed while session is active.
+      // resetState(); // This is now more specifically called.
     };
   }, []);
 
 
   return {
     userId,
+    myAlias, // Added
     messages,
     connectionStatus,
     chatPartnerId,
+    partnerAlias, // Added
     error,
     isPartnerTyping,
     connectToRandomUser,

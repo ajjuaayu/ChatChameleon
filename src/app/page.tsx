@@ -4,16 +4,18 @@
 import { useChatSession } from '@/hooks/useChatSession';
 import { Button } from '@/components/ui/button';
 import { ChatArea } from '@/components/ChatArea';
-import { Loader2, Users, AlertTriangle } from 'lucide-react';
+import { Loader2, Users, AlertTriangle, Smile } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { ThemeToggleButton } from '@/components/ThemeToggleButton';
 
 export default function HomePage() {
   const {
     userId,
+    myAlias, // Changed from userName
     messages,
     connectionStatus,
     chatPartnerId,
+    partnerAlias, // Changed from chatPartnerName
     error,
     isPartnerTyping,
     connectToRandomUser,
@@ -44,7 +46,8 @@ export default function HomePage() {
                 <ThemeToggleButton />
               </CardContent>
                <CardFooter className="flex flex-col items-center justify-center pt-2">
-                {userId && <p className="text-xs text-muted-foreground">Your ID: {userId.slice(-6)}</p>}
+                {myAlias && <p className="text-xs text-muted-foreground flex items-center gap-1"><Smile size={14}/> Your Alias: {myAlias}</p>}
+                {!myAlias && userId && <p className="text-xs text-muted-foreground">Your ID: {userId.slice(-6)}</p>}
               </CardFooter>
             </Card>
           </div>
@@ -53,7 +56,7 @@ export default function HomePage() {
         return (
           <div className="flex flex-col items-center gap-2 text-lg">
             <Loader2 className="w-12 h-12 animate-spin text-primary" />
-            <p>Connecting...</p>
+            <p>Connecting as {myAlias || 'Anonymous'}...</p>
           </div>
         );
       case 'waiting':
@@ -61,6 +64,7 @@ export default function HomePage() {
           <div className="flex flex-col items-center gap-4">
             <Loader2 className="w-12 h-12 animate-spin text-primary" />
             <p className="text-lg">Waiting for a partner...</p>
+            {myAlias && <p className="text-sm text-muted-foreground">Your alias: {myAlias}</p>}
             <Button variant="outline" onClick={disconnect}>Cancel</Button>
              <div className="absolute top-4 right-4">
               <ThemeToggleButton />
@@ -70,7 +74,7 @@ export default function HomePage() {
       case 'connected':
         return (
           <>
-            <div className="absolute top-4 right-4 z-50"> {/* Ensure button is above chat area */}
+            <div className="absolute top-4 right-4 z-50"> 
               <ThemeToggleButton />
             </div>
             <ChatArea
@@ -78,7 +82,9 @@ export default function HomePage() {
               sendMessage={sendMessage}
               disconnect={disconnect}
               currentUserId={userId}
+              currentUserAlias={myAlias} // Pass current user's alias
               partnerId={chatPartnerId}
+              partnerAlias={partnerAlias} // Pass partner's alias
               isPartnerTyping={isPartnerTyping}
               onUserTyping={handleUserTyping}
             />

@@ -16,6 +16,8 @@ export interface ChatSession {
   typing_status?: Record<string, boolean>; // { [userId]: boolean }
   createdAt: number | object;
   updatedAt: number | object;
+  user1Name?: string;
+  user2Name?: string;
 }
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'waiting' | 'connected' | 'error';

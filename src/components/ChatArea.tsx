@@ -16,12 +16,24 @@ interface ChatAreaProps {
   sendMessage: (text: string) => void;
   disconnect: () => void;
   currentUserId: string;
+  currentUserAlias: string | null;
   partnerId: string | null;
+  partnerAlias: string | null;
   isPartnerTyping: boolean;
   onUserTyping: () => void;
 }
 
-export function ChatArea({ messages, sendMessage, disconnect, currentUserId, partnerId, isPartnerTyping, onUserTyping }: ChatAreaProps) {
+export function ChatArea({ 
+  messages, 
+  sendMessage, 
+  disconnect, 
+  currentUserId, 
+  currentUserAlias,
+  partnerId, 
+  partnerAlias,
+  isPartnerTyping, 
+  onUserTyping 
+}: ChatAreaProps) {
   const [newMessage, setNewMessage] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
@@ -42,9 +54,14 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
     }
   };
   
-  const getInitials = (id: string | null) => {
-    if (!id) return '?';
-    return id.substring(0, 2).toUpperCase();
+  const getInitials = (alias: string | null, id: string | null) => {
+    if (alias) {
+      return alias.substring(0, 2).toUpperCase();
+    }
+    if (id) {
+      return id.substring(0, 2).toUpperCase();
+    }
+    return '?';
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -52,20 +69,22 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
     onUserTyping();
   };
 
+  const displayedPartnerName = partnerAlias || (partnerId ? `User ${partnerId.slice(-4)}` : 'Stranger');
+
   return (
     <Card className="w-full sm:max-w-3xl flex-grow flex flex-col shadow-xl sm:rounded-lg overflow-hidden">
       <CardHeader className="flex flex-row items-center justify-between p-4 border-b">
         <div className="flex items-center gap-2">
           <UserCircle className="w-8 h-8 text-primary" />
-          <CardTitle className="text-lg">
-            Chatting with {partnerId ? `User ${partnerId.slice(-4)}` : 'a Stranger'}
+          <CardTitle className="text-lg truncate" title={displayedPartnerName}>
+            Chatting with {displayedPartnerName}
           </CardTitle>
         </div>
         <Button variant="ghost" size="icon" onClick={disconnect} aria-label="Disconnect chat">
           <LogOut className="w-5 h-5 text-destructive" />
         </Button>
       </CardHeader>
-      <CardContent className="flex-grow p-0 min-h-0"> {/* Added min-h-0 here */}
+      <CardContent className="flex-grow p-0 min-h-0">
         <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
           <div className="space-y-4">
             {messages.map((msg) => (
@@ -78,7 +97,7 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
                 {msg.senderId !== currentUserId && (
                   <Avatar className="w-8 h-8">
                     <AvatarFallback className="bg-accent text-accent-foreground">
-                      {getInitials(msg.senderId)}
+                      {getInitials(partnerAlias, msg.senderId)}
                     </AvatarFallback>
                   </Avatar>
                 )}
@@ -89,15 +108,15 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
                       : 'bg-secondary text-secondary-foreground rounded-bl-none'
                   }`}
                 >
-                  <p className="text-sm">{msg.text}</p>
-                  <p className={`text-xs mt-1 ${msg.senderId === currentUserId ? 'text-primary-foreground opacity-75' : 'text-muted-foreground'}`}>
+                  <p className="text-sm break-words">{msg.text}</p>
+                  <p className={`text-xs mt-1 ${msg.senderId === currentUserId ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
                      {new Date(typeof msg.timestamp === 'number' ? msg.timestamp : Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 </div>
                 {msg.senderId === currentUserId && (
                   <Avatar className="w-8 h-8">
                      <AvatarFallback className="bg-muted text-muted-foreground">
-                      {getInitials(currentUserId)}
+                      {getInitials(currentUserAlias, currentUserId)}
                     </AvatarFallback>
                   </Avatar>
                 )}
@@ -107,12 +126,12 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
               <div className="flex items-center gap-2 justify-start">
                  <Avatar className="w-8 h-8">
                     <AvatarFallback className="bg-accent text-accent-foreground">
-                      {getInitials(partnerId)}
+                      {getInitials(partnerAlias, partnerId)}
                     </AvatarFallback>
                   </Avatar>
                 <div className="flex items-center p-2.5 rounded-lg bg-secondary text-secondary-foreground rounded-bl-none shadow">
                   <MessageCircleMore className="w-4 h-4 mr-2 animate-pulse" />
-                  <span className="text-sm italic">typing...</span>
+                  <span className="text-sm italic">{partnerAlias || 'Partner'} is typing...</span>
                 </div>
               </div>
             )}
