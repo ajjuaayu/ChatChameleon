@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { database } from '@/lib/firebase';
-import { ref, onValue, set, push, serverTimestamp, query, orderByChild, equalTo, limitToFirst, remove, onDisconnect } from 'firebase/database';
+import { ref, onValue, set, push, serverTimestamp, query, orderByChild, equalTo, limitToFirst, remove, onDisconnect, get, update, type DatabaseReference } from 'firebase/database';
 import type { ChatMessage, ChatSession, ConnectionStatus } from '@/types';
 
 const SESSIONS_PATH = 'chat_sessions';
@@ -30,203 +30,231 @@ export function useChatSession() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [isConnecting, setIsConnecting] = useState<boolean>(false);
 
-  const sessionRef = useRef(null);
-  const waitingQueryRef = useRef(null);
-  const messagesRef = useRef(null);
+  // Store unsubscribe functions in refs
+  const unsubscribeSessionRef = useRef<(() => void) | null>(null);
+  const unsubscribeMessagesRef = useRef<(() => void) | null>(null);
+  const activeSessionDbRefForDisconnect = useRef<DatabaseReference | null>(null);
+
 
   useEffect(() => {
     setUserId(generateClientId());
   }, []);
 
-  const cleanupListeners = useCallback(() => {
-    if (sessionRef.current) {
-      // off(sessionRef.current) does not work directly with onValue, need to store the unsubscribe function
-      // For simplicity, we are not storing and calling unsubscribe here.
-      // In a real app, you'd get the unsubscribe function from onValue and call it.
-      sessionRef.current = null; 
-    }
-    if (waitingQueryRef.current) {
-      // off(waitingQueryRef.current);
-      waitingQueryRef.current = null;
-    }
-     if (messagesRef.current) {
-      // off(messagesRef.current);
-      messagesRef.current = null;
-    }
-  }, []);
-  
   const resetState = useCallback(() => {
+    // Detach listeners first
+    if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
+    if (unsubscribeMessagesRef.current) unsubscribeMessagesRef.current();
+    unsubscribeSessionRef.current = null;
+    unsubscribeMessagesRef.current = null;
+
+    // Cancel onDisconnect for the *previous* session if it exists
+    if (activeSessionDbRefForDisconnect.current) {
+        onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel onDisconnect in resetState:", err));
+        activeSessionDbRefForDisconnect.current = null; 
+    }
+    
     setCurrentSessionId(null);
     setChatPartnerId(null);
     setMessages([]);
     setError(null);
-    cleanupListeners();
-  }, [cleanupListeners]);
+    setIsConnecting(false); // Ensure connecting flag is reset
+    // setConnectionStatus('idle'); // Will be set by disconnect or successful connection end
+  }, []);
 
 
   const connectToRandomUser = useCallback(async () => {
+    resetState(); // Reset state from any previous session first
+
     if (!userId) {
       setError("User ID not available.");
       setConnectionStatus('error');
       return;
     }
+    if (isConnecting) {
+      console.log("Connection attempt already in progress.");
+      return;
+    }
 
+    setIsConnecting(true);
     setConnectionStatus('connecting');
     setError(null);
-    resetState();
 
     const sessionsDbRef = ref(database, SESSIONS_PATH);
     const waitingSessionsQuery = query(
       sessionsDbRef,
       orderByChild('status'),
       equalTo('waiting'),
-      limitToFirst(1)
+      limitToFirst(5) // Query a few to increase chances of finding one quickly
     );
-    
-    waitingQueryRef.current = waitingSessionsQuery;
 
-    onValue(waitingSessionsQuery, async (snapshot) => {
-      // Detach listener immediately after first read for finding a session
-      // This onValue is tricky for "find or create". We might need a get() then decide.
-      // For now, this will keep listening if no waiting session found initially which is not ideal.
-      // A better approach would be a transaction or a cloud function for matching.
-      // Simplified:
-      if (connectionStatus !== 'connecting' && connectionStatus !== 'waiting') return;
+    try {
+      const snapshot = await get(waitingSessionsQuery);
+      let sessionJoined = false;
 
-
-      let sessionFound = false;
       if (snapshot.exists()) {
-        snapshot.forEach((childSnapshot) => {
-          if (sessionFound) return;
-          const session = childSnapshot.val() as ChatSession;
-          const sessionId = childSnapshot.key;
-
-          if (session.user1Id !== userId && !session.user2Id) { // Found a waiting session from another user
-            sessionFound = true;
-            const sessionToUpdateRef = ref(database, `${SESSIONS_PATH}/${sessionId}`);
-            set(sessionToUpdateRef, {
-              ...session,
-              user2Id: userId,
-              status: 'active',
-              updatedAt: serverTimestamp(),
-            }).then(() => {
-              setCurrentSessionId(sessionId);
-              setChatPartnerId(session.user1Id);
-              setConnectionStatus('connected');
-            }).catch(err => {
-              setError("Failed to join session: " + err.message);
-              setConnectionStatus('error');
-            });
+        const sessionsData = snapshot.val();
+        for (const sessionIdKey in sessionsData) {
+          if (Object.prototype.hasOwnProperty.call(sessionsData, sessionIdKey)) {
+            const session = sessionsData[sessionIdKey] as ChatSession;
+            if (session.user1Id !== userId && !session.user2Id) { // Found a waiting session from another user
+              const sessionToUpdateRef = ref(database, `${SESSIONS_PATH}/${sessionIdKey}`);
+              try {
+                await update(sessionToUpdateRef, {
+                  user2Id: userId,
+                  status: 'active',
+                  updatedAt: serverTimestamp(),
+                });
+                setCurrentSessionId(sessionIdKey); // This will trigger the main useEffect
+                sessionJoined = true;
+                break; 
+              } catch (joinError) {
+                console.error(`Failed to join session ${sessionIdKey}:`, joinError);
+                // Continue to try other waiting sessions or create a new one
+              }
+            }
           }
-        });
+        }
       }
 
-      if (!sessionFound && (connectionStatus === 'connecting' || connectionStatus === 'waiting')) { // No waiting session, create one
+      if (!sessionJoined) {
         const newSessionRef = push(sessionsDbRef);
-        const newSessionId = newSessionRef.key;
-        if (!newSessionId) {
-          setError("Failed to create session key.");
-          setConnectionStatus('error');
-          return;
+        const newSessionIdKey = newSessionRef.key;
+        if (!newSessionIdKey) {
+          throw new Error("Failed to create session key.");
         }
         
         const newSessionData: Partial<ChatSession> = {
           user1Id: userId,
           user2Id: null,
           status: 'waiting',
-          messages: {},
+          messages: {}, // Initialize messages
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
 
         await set(newSessionRef, newSessionData);
-        setCurrentSessionId(newSessionId);
-        setConnectionStatus('waiting');
-        
-        // Setup onDisconnect for the waiting user
-        const user1OnDisconnectRef = ref(database, `${SESSIONS_PATH}/${newSessionId}/status`);
-        onDisconnect(user1OnDisconnectRef).set('closed').catch(console.error);
-         // Also fully remove if closed and still waiting (user2 never joined)
-        const fullSessionOnDisconnectRef = ref(database, `${SESSIONS_PATH}/${newSessionId}`);
-        onDisconnect(fullSessionOnDisconnectRef).remove().catch(console.error); // This might be too aggressive, consider 'closed' status first
+        setCurrentSessionId(newSessionIdKey); // This will trigger the main useEffect
       }
-    }, { onlyOnce: false }); // onlyOnce: false to keep listening if waiting
-
-  }, [userId, resetState, connectionStatus]);
+    } catch (err: any) {
+      console.error("Connection error:", err);
+      setError("Connection error: " + err.message);
+      setConnectionStatus('error');
+      setIsConnecting(false); 
+    }
+    // setIsConnecting will be set to false by the main useEffect once status is connected/waiting, or if error occurred
+  }, [userId, isConnecting, resetState]);
 
   useEffect(() => {
-    if (!currentSessionId || !userId) return;
+    if (!currentSessionId || !userId) {
+      // If there's no current session, ensure we are in a clean idle state if not already error.
+      if (connectionStatus !== 'idle' && connectionStatus !== 'error' && connectionStatus !== 'connecting') {
+        // setConnectionStatus('idle'); // Avoid infinite loop if resetState also sets to idle.
+        // resetState(); // This might be too broad here. Disconnect should handle full reset.
+      }
+      return;
+    }
 
     const currentSessionDbRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}`);
-    sessionRef.current = currentSessionDbRef;
+    activeSessionDbRefForDisconnect.current = currentSessionDbRef; 
 
-    const unsubscribeSession = onValue(currentSessionDbRef, (snapshot) => {
+    // Clear previous listeners before attaching new ones
+    if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
+    if (unsubscribeMessagesRef.current) unsubscribeMessagesRef.current();
+    
+    unsubscribeSessionRef.current = onValue(currentSessionDbRef, (snapshot) => {
+      setIsConnecting(false); // Connection process is resolved (either found, waiting, or failed by deletion)
+
       if (!snapshot.exists()) {
-        // Session was deleted (e.g., by other user disconnecting)
         if (connectionStatus === 'connected' || connectionStatus === 'waiting') {
-           setError("Chat session ended.");
+           setError("Chat session ended abruptly.");
         }
-        resetState();
         setConnectionStatus('idle');
+        setCurrentSessionId(null); 
+        setChatPartnerId(null);
+        setMessages([]);
         return;
       }
 
       const sessionData = snapshot.val() as ChatSession;
       if (sessionData.status === 'closed') {
         if (connectionStatus === 'connected' || connectionStatus === 'waiting') {
-          setError("Chat session has been closed.");
+           setError("Chat session has been closed.");
         }
-        resetState();
         setConnectionStatus('idle');
-        // remove(currentSessionDbRef); // Clean up if closed
+        setCurrentSessionId(null);
+        setChatPartnerId(null);
+        setMessages([]);
+        // remove(currentSessionDbRef).catch(e => console.warn("Could not remove closed session:", e));
         return;
       }
 
-      if (sessionData.status === 'active' && connectionStatus !== 'connected') {
-        setConnectionStatus('connected');
+      if (sessionData.status === 'active') {
         const partner = sessionData.user1Id === userId ? sessionData.user2Id : sessionData.user1Id;
-        setChatPartnerId(partner);
+        if (partner) {
+            setChatPartnerId(partner);
+            setConnectionStatus('connected');
+        } else {
+            console.warn("Session active but partner ID is missing. Reverting to waiting.");
+            setConnectionStatus('waiting');
+        }
+      } else if (sessionData.status === 'waiting') {
+        // Ensure this client is indeed user1 if status is waiting.
+        // If this client is user2, status should be active.
+        if(sessionData.user1Id === userId){
+            setConnectionStatus('waiting');
+            setChatPartnerId(null);
+        } else if (sessionData.user2Id === userId) {
+            // This should ideally not happen: status waiting but user2Id is this user.
+            // Session should have been 'active'. Potentially a race condition.
+            console.warn("Session status is 'waiting' but this client is user2. Treating as 'active'.");
+            setChatPartnerId(sessionData.user1Id);
+            setConnectionStatus('connected');
+        }
       }
-      
-      // Messages handling is separate now
+    }, (errorVal) => {
+        console.error("Error listening to session:", errorVal);
+        setError("Error in session: " + errorVal.message);
+        setConnectionStatus('error');
+        setIsConnecting(false);
     });
     
-    // Messages listener
     const messagesDbRefPath = `${SESSIONS_PATH}/${currentSessionId}/messages`;
-    messagesRef.current = ref(database, messagesDbRefPath);
-    const unsubscribeMessages = onValue(messagesRef.current, (snapshot) => {
+    const currentMessagesDbRef = ref(database, messagesDbRefPath);
+    unsubscribeMessagesRef.current = onValue(currentMessagesDbRef, (snapshot) => {
         const messagesData = snapshot.val();
         if (messagesData) {
           const newMessages = Object.entries(messagesData).map(([id, msg]: [string, any]) => ({
             ...msg,
             id,
-            isLocalSender: msg.senderId === userId,
           })).sort((a, b) => a.timestamp - b.timestamp);
           setMessages(newMessages);
         } else {
           setMessages([]);
         }
+    }, (errorVal) => {
+        console.error("Error listening to messages:", errorVal);
+        setError("Error loading messages: " + errorVal.message);
     });
 
-
-    // Setup onDisconnect for active session
-    const statusOnDisconnectRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}/status`);
-    // When this client disconnects, mark the session as closed.
-    // The other client's onValue listener for the session will see status='closed' and then clean up.
-    // Or, for immediate ephemeral, remove the session.
-    const sessionOnDisconnectRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}`);
-    onDisconnect(sessionOnDisconnectRef).remove().catch(console.error);
-
+    onDisconnect(currentSessionDbRef).remove().catch(err => console.error("Failed to set onDisconnect(remove) for session:", err));
 
     return () => {
-      unsubscribeSession();
-      unsubscribeMessages();
-      // To prevent onDisconnect from firing if we disconnect cleanly:
-      if (sessionOnDisconnectRef.current) onDisconnect(sessionOnDisconnectRef.current).cancel();
-      cleanupListeners();
+      if (unsubscribeSessionRef.current) {
+        unsubscribeSessionRef.current();
+        unsubscribeSessionRef.current = null;
+      }
+      if (unsubscribeMessagesRef.current) {
+        unsubscribeMessagesRef.current();
+        unsubscribeMessagesRef.current = null;
+      }
+      if (activeSessionDbRefForDisconnect.current) {
+        onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel onDisconnect(remove) for session:", err));
+        activeSessionDbRefForDisconnect.current = null;
+      }
     };
-  }, [currentSessionId, userId, resetState, connectionStatus]);
+  }, [currentSessionId, userId]); // Removed connectionStatus from deps
 
 
   const sendMessage = useCallback(async (text: string) => {
@@ -239,43 +267,45 @@ export function useChatSession() {
     };
     const sessionMessagesRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}/messages`);
     const newMessageRef = push(sessionMessagesRef);
-    await set(newMessageRef, messageData);
-    // Update session's updatedAt timestamp
-    const sessionUpdatedAtRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}/updatedAt`);
-    await set(sessionUpdatedAtRef, serverTimestamp());
-
+    
+    try {
+        await set(newMessageRef, messageData);
+        const sessionUpdatedAtRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}/updatedAt`);
+        await set(sessionUpdatedAtRef, serverTimestamp());
+    } catch(e : any) {
+        console.error("Failed to send message:", e);
+        setError("Failed to send message: " + e.message);
+    }
   }, [currentSessionId, userId]);
 
   const disconnect = useCallback(async () => {
-    if (!currentSessionId) return;
+    const sessionIdToDisconnect = currentSessionId; 
     
-    const sessionToDisconnectRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}`);
-    try {
-      // Instead of setting status to 'closed', we just remove it for ephemeral chats
-      await remove(sessionToDisconnectRef);
-    } catch (err) {
-      console.error("Error during disconnect: ", err);
-      setError("Failed to properly disconnect session.");
-    } finally {
-      // Cancel any pending onDisconnect operations for this session path
-      onDisconnect(sessionToDisconnectRef).cancel();
-      resetState();
-      setConnectionStatus('idle');
+    resetState(); // Clears currentSessionId, listeners, and onDisconnect for that session
+    setConnectionStatus('idle'); 
+
+    if (sessionIdToDisconnect) {
+      const sessionToDisconnectRef = ref(database, `${SESSIONS_PATH}/${sessionIdToDisconnect}`);
+      try {
+        await remove(sessionToDisconnectRef);
+      } catch (err: any) {
+        console.error("Error removing session on disconnect: ", err);
+        // Don't set error here as resetState already cleared it.
+        // setError("Failed to properly remove session from database.");
+      }
     }
   }, [currentSessionId, resetState]);
   
+  // General cleanup for component unmount
   useEffect(() => {
-    // General cleanup for component unmount
     return () => {
-      if (currentSessionId) {
-        // This is a fallback if disconnect() wasn't called
-        // but onDisconnect Firebase handler should ideally cover abrupt closes.
-        const sessionToCleanRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}`);
-        // onDisconnect(sessionToCleanRef).remove(); // This was already set
-      }
-      cleanupListeners();
+      // This will call resetState if the component is unmounted.
+      // If a session was active, onDisconnect().remove() should handle DB cleanup for abrupt closes.
+      // For explicit unmounts (e.g. navigating away), disconnect() should be called by the component.
+      // resetState(); // This might be too aggressive if disconnect() is the preferred way.
+      // Let's rely on the specific useEffect cleanup for currentSessionId.
     };
-  }, [currentSessionId, cleanupListeners]);
+  }, [resetState]);
 
 
   return {
