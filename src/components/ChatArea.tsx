@@ -65,7 +65,7 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
           <LogOut className="w-5 h-5 text-destructive" />
         </Button>
       </CardHeader>
-      <CardContent className="flex-grow p-0">
+      <CardContent className="flex-grow p-0 min-h-0"> {/* Added min-h-0 here */}
         <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
           <div className="space-y-4">
             {messages.map((msg) => (
@@ -90,7 +90,7 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
                   }`}
                 >
                   <p className="text-sm">{msg.text}</p>
-                  <p className={`text-xs mt-1 ${msg.senderId === currentUserId ? 'text-blue-200' : 'text-muted-foreground'}`}>
+                  <p className={`text-xs mt-1 ${msg.senderId === currentUserId ? 'text-primary-foreground opacity-75' : 'text-muted-foreground'}`}>
                      {new Date(typeof msg.timestamp === 'number' ? msg.timestamp : Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 </div>
