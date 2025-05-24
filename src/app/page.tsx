@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useChatSession } from '@/hooks/useChatSession';
@@ -13,9 +14,11 @@ export default function HomePage() {
     connectionStatus,
     chatPartnerId,
     error,
+    isPartnerTyping,
     connectToRandomUser,
     sendMessage,
     disconnect,
+    handleUserTyping,
   } = useChatSession();
 
   const renderContent = () => {
@@ -65,6 +68,8 @@ export default function HomePage() {
             disconnect={disconnect}
             currentUserId={userId}
             partnerId={chatPartnerId}
+            isPartnerTyping={isPartnerTyping}
+            onUserTyping={handleUserTyping}
           />
         );
       case 'error':

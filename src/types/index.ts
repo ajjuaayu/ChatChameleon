@@ -1,3 +1,4 @@
+
 export interface ChatMessage {
   id: string;
   senderId: string;
@@ -12,6 +13,7 @@ export interface ChatSession {
   user2Id: string | null;
   status: 'waiting' | 'active' | 'closed';
   messages: Record<string, Omit<ChatMessage, 'id' | 'isLocalSender'>>; // Messages stored in Firebase
+  typing_status?: Record<string, boolean>; // { [userId]: boolean }
   createdAt: number | object;
   updatedAt: number | object;
 }

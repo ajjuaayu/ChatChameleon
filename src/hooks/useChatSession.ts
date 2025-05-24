@@ -1,3 +1,4 @@
+
 // @ts-nocheck
 // Disabling TypeScript checks for this file due to Firebase SDK dynamic nature and
 // focus on core logic for this example. In a production app, ensure full type safety.
@@ -9,6 +10,7 @@ import { ref, onValue, set, push, serverTimestamp, query, orderByChild, equalTo,
 import type { ChatMessage, ChatSession, ConnectionStatus } from '@/types';
 
 const SESSIONS_PATH = 'chat_sessions';
+const TYPING_TIMEOUT_DURATION = 3000; // 3 seconds
 
 function generateClientId() {
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -31,41 +33,74 @@ export function useChatSession() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
+  const [isPartnerTyping, setIsPartnerTyping] = useState<boolean>(false);
 
-  // Store unsubscribe functions in refs
   const unsubscribeSessionRef = useRef<(() => void) | null>(null);
   const unsubscribeMessagesRef = useRef<(() => void) | null>(null);
   const activeSessionDbRefForDisconnect = useRef<DatabaseReference | null>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const userTypingRefForDisconnect = useRef<DatabaseReference | null>(null);
 
 
   useEffect(() => {
     setUserId(generateClientId());
   }, []);
 
+  const setMyTypingStatus = useCallback(async (isTyping: boolean) => {
+    if (!currentSessionId || !userId) return;
+    const typingRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}/typing_status/${userId}`);
+    try {
+      await set(typingRef, isTyping);
+    } catch (e) {
+      console.warn("Failed to set typing status:", e);
+    }
+  }, [currentSessionId, userId]);
+
+  const handleUserTyping = useCallback(() => {
+    if (!currentSessionId || !userId || connectionStatus !== 'connected') return;
+
+    setMyTypingStatus(true);
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    typingTimeoutRef.current = setTimeout(() => {
+      setMyTypingStatus(false);
+    }, TYPING_TIMEOUT_DURATION);
+  }, [setMyTypingStatus, currentSessionId, userId, connectionStatus]);
+
+
   const resetState = useCallback(() => {
-    // Detach listeners first
     if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
     if (unsubscribeMessagesRef.current) unsubscribeMessagesRef.current();
     unsubscribeSessionRef.current = null;
     unsubscribeMessagesRef.current = null;
 
-    // Cancel onDisconnect for the *previous* session if it exists
     if (activeSessionDbRefForDisconnect.current) {
-        onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel onDisconnect in resetState:", err));
+        onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel session onDisconnect in resetState:", err));
         activeSessionDbRefForDisconnect.current = null; 
+    }
+    if (userTypingRefForDisconnect.current) {
+        onDisconnect(userTypingRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel typing onDisconnect in resetState:", err));
+        userTypingRefForDisconnect.current = null;
+    }
+    if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
     }
     
     setCurrentSessionId(null);
     setChatPartnerId(null);
     setMessages([]);
     setError(null);
-    setIsConnecting(false); // Ensure connecting flag is reset
-    // setConnectionStatus('idle'); // Will be set by disconnect or successful connection end
+    setIsConnecting(false);
+    setIsPartnerTyping(false);
   }, []);
 
 
   const connectToRandomUser = useCallback(async () => {
-    resetState(); // Reset state from any previous session first
+    resetState(); 
 
     if (!userId) {
       setError("User ID not available.");
@@ -86,7 +121,7 @@ export function useChatSession() {
       sessionsDbRef,
       orderByChild('status'),
       equalTo('waiting'),
-      limitToFirst(5) // Query a few to increase chances of finding one quickly
+      limitToFirst(5) 
     );
 
     try {
@@ -98,20 +133,20 @@ export function useChatSession() {
         for (const sessionIdKey in sessionsData) {
           if (Object.prototype.hasOwnProperty.call(sessionsData, sessionIdKey)) {
             const session = sessionsData[sessionIdKey] as ChatSession;
-            if (session.user1Id !== userId && !session.user2Id) { // Found a waiting session from another user
+            if (session.user1Id !== userId && !session.user2Id) { 
               const sessionToUpdateRef = ref(database, `${SESSIONS_PATH}/${sessionIdKey}`);
               try {
                 await update(sessionToUpdateRef, {
                   user2Id: userId,
                   status: 'active',
                   updatedAt: serverTimestamp(),
+                  typing_status: { [userId]: false, [session.user1Id]: false } // Initialize typing status
                 });
-                setCurrentSessionId(sessionIdKey); // This will trigger the main useEffect
+                setCurrentSessionId(sessionIdKey); 
                 sessionJoined = true;
                 break; 
               } catch (joinError) {
                 console.error(`Failed to join session ${sessionIdKey}:`, joinError);
-                // Continue to try other waiting sessions or create a new one
               }
             }
           }
@@ -129,13 +164,14 @@ export function useChatSession() {
           user1Id: userId,
           user2Id: null,
           status: 'waiting',
-          messages: {}, // Initialize messages
+          messages: {},
+          typing_status: { [userId]: false }, // Initialize typing status
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
 
         await set(newSessionRef, newSessionData);
-        setCurrentSessionId(newSessionIdKey); // This will trigger the main useEffect
+        setCurrentSessionId(newSessionIdKey); 
       }
     } catch (err: any) {
       console.error("Connection error:", err);
@@ -143,37 +179,39 @@ export function useChatSession() {
       setConnectionStatus('error');
       setIsConnecting(false); 
     }
-    // setIsConnecting will be set to false by the main useEffect once status is connected/waiting, or if error occurred
   }, [userId, isConnecting, resetState]);
 
   useEffect(() => {
     if (!currentSessionId || !userId) {
-      // If there's no current session, ensure we are in a clean idle state if not already error.
       if (connectionStatus !== 'idle' && connectionStatus !== 'error' && connectionStatus !== 'connecting') {
-        // setConnectionStatus('idle'); // Avoid infinite loop if resetState also sets to idle.
-        // resetState(); // This might be too broad here. Disconnect should handle full reset.
+        // Potentially reset or set to idle if session is lost without explicit disconnect
       }
       return;
     }
 
     const currentSessionDbRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}`);
     activeSessionDbRefForDisconnect.current = currentSessionDbRef; 
+    
+    const currentUserTypingFirebaseRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}/typing_status/${userId}`);
+    userTypingRefForDisconnect.current = currentUserTypingFirebaseRef;
 
-    // Clear previous listeners before attaching new ones
+
     if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
     if (unsubscribeMessagesRef.current) unsubscribeMessagesRef.current();
     
     unsubscribeSessionRef.current = onValue(currentSessionDbRef, (snapshot) => {
-      setIsConnecting(false); // Connection process is resolved (either found, waiting, or failed by deletion)
+      setIsConnecting(false); 
 
       if (!snapshot.exists()) {
         if (connectionStatus === 'connected' || connectionStatus === 'waiting') {
            setError("Chat session ended abruptly.");
         }
         setConnectionStatus('idle');
+        // resetState will be called by disconnect or if currentSessionId becomes null elsewhere
         setCurrentSessionId(null); 
         setChatPartnerId(null);
         setMessages([]);
+        setIsPartnerTyping(false);
         return;
       }
 
@@ -186,32 +224,24 @@ export function useChatSession() {
         setCurrentSessionId(null);
         setChatPartnerId(null);
         setMessages([]);
-        // remove(currentSessionDbRef).catch(e => console.warn("Could not remove closed session:", e));
+        setIsPartnerTyping(false);
         return;
       }
 
-      if (sessionData.status === 'active') {
-        const partner = sessionData.user1Id === userId ? sessionData.user2Id : sessionData.user1Id;
-        if (partner) {
-            setChatPartnerId(partner);
-            setConnectionStatus('connected');
-        } else {
-            console.warn("Session active but partner ID is missing. Reverting to waiting.");
-            setConnectionStatus('waiting');
-        }
-      } else if (sessionData.status === 'waiting') {
-        // Ensure this client is indeed user1 if status is waiting.
-        // If this client is user2, status should be active.
-        if(sessionData.user1Id === userId){
-            setConnectionStatus('waiting');
-            setChatPartnerId(null);
-        } else if (sessionData.user2Id === userId) {
-            // This should ideally not happen: status waiting but user2Id is this user.
-            // Session should have been 'active'. Potentially a race condition.
-            console.warn("Session status is 'waiting' but this client is user2. Treating as 'active'.");
-            setChatPartnerId(sessionData.user1Id);
-            setConnectionStatus('connected');
-        }
+      const partner = sessionData.user1Id === userId ? sessionData.user2Id : sessionData.user1Id;
+      setChatPartnerId(partner); // Set partner ID regardless of status if available
+
+      if (sessionData.status === 'active' && partner) {
+        setConnectionStatus('connected');
+        const partnerTyping = sessionData.typing_status && partner ? !!sessionData.typing_status[partner] : false;
+        setIsPartnerTyping(partnerTyping);
+      } else if (sessionData.status === 'waiting' && sessionData.user1Id === userId) {
+        setConnectionStatus('waiting');
+        setIsPartnerTyping(false);
+      } else if (sessionData.status === 'active' && !partner) {
+         console.warn("Session active but partner ID is missing. Reverting to waiting.");
+         setConnectionStatus('waiting');
+         setIsPartnerTyping(false);
       }
     }, (errorVal) => {
         console.error("Error listening to session:", errorVal);
@@ -238,27 +268,36 @@ export function useChatSession() {
         setError("Error loading messages: " + errorVal.message);
     });
 
+    // Setup onDisconnect listeners
     onDisconnect(currentSessionDbRef).remove().catch(err => console.error("Failed to set onDisconnect(remove) for session:", err));
+    onDisconnect(currentUserTypingFirebaseRef).set(false).catch(err => console.warn("Failed to set onDisconnect for typing status:", err));
+
 
     return () => {
-      if (unsubscribeSessionRef.current) {
-        unsubscribeSessionRef.current();
-        unsubscribeSessionRef.current = null;
-      }
-      if (unsubscribeMessagesRef.current) {
-        unsubscribeMessagesRef.current();
-        unsubscribeMessagesRef.current = null;
-      }
+      if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
+      if (unsubscribeMessagesRef.current) unsubscribeMessagesRef.current();
+      
       if (activeSessionDbRefForDisconnect.current) {
-        onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel onDisconnect(remove) for session:", err));
-        activeSessionDbRefForDisconnect.current = null;
+        onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel session onDisconnect cleanup:", err));
+      }
+      if (userTypingRefForDisconnect.current) {
+        onDisconnect(userTypingRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel typing onDisconnect cleanup:", err));
+      }
+       if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
       }
     };
-  }, [currentSessionId, userId]); // Removed connectionStatus from deps
+  }, [currentSessionId, userId, connectionStatus]); // Added connectionStatus to re-evaluate if it changes
 
 
   const sendMessage = useCallback(async (text: string) => {
-    if (!currentSessionId || !userId || text.trim() === '') return;
+    if (!currentSessionId || !userId || text.trim() === '' || connectionStatus !== 'connected') return;
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    setMyTypingStatus(false); // Sent message, so not typing anymore
 
     const messageData = {
       senderId: userId,
@@ -276,12 +315,21 @@ export function useChatSession() {
         console.error("Failed to send message:", e);
         setError("Failed to send message: " + e.message);
     }
-  }, [currentSessionId, userId]);
+  }, [currentSessionId, userId, setMyTypingStatus, connectionStatus]);
 
   const disconnect = useCallback(async () => {
     const sessionIdToDisconnect = currentSessionId; 
     
-    resetState(); // Clears currentSessionId, listeners, and onDisconnect for that session
+    if (sessionIdToDisconnect && userId) { // Set typing to false before removing session
+        const userTypingFirebaseRef = ref(database, `${SESSIONS_PATH}/${sessionIdToDisconnect}/typing_status/${userId}`);
+        try {
+            await set(userTypingFirebaseRef, false);
+        } catch (e) {
+            console.warn("Could not set typing to false before disconnect", e)
+        }
+    }
+
+    resetState(); 
     setConnectionStatus('idle'); 
 
     if (sessionIdToDisconnect) {
@@ -290,22 +338,17 @@ export function useChatSession() {
         await remove(sessionToDisconnectRef);
       } catch (err: any) {
         console.error("Error removing session on disconnect: ", err);
-        // Don't set error here as resetState already cleared it.
-        // setError("Failed to properly remove session from database.");
       }
     }
-  }, [currentSessionId, resetState]);
+  }, [currentSessionId, userId, resetState]);
   
-  // General cleanup for component unmount
   useEffect(() => {
     return () => {
-      // This will call resetState if the component is unmounted.
-      // If a session was active, onDisconnect().remove() should handle DB cleanup for abrupt closes.
-      // For explicit unmounts (e.g. navigating away), disconnect() should be called by the component.
-      // resetState(); // This might be too aggressive if disconnect() is the preferred way.
-      // Let's rely on the specific useEffect cleanup for currentSessionId.
+      // General cleanup: if component unmounts and a session might be active,
+      // ensure local state is reset. Firebase onDisconnect should handle DB.
+      // resetState(); // This is now called more specifically.
     };
-  }, [resetState]);
+  }, []);
 
 
   return {
@@ -314,8 +357,10 @@ export function useChatSession() {
     connectionStatus,
     chatPartnerId,
     error,
+    isPartnerTyping,
     connectToRandomUser,
     sendMessage,
     disconnect,
+    handleUserTyping,
   };
 }

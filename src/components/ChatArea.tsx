@@ -1,3 +1,4 @@
+
 "use client";
 
 import type React from 'react';
@@ -6,8 +7,8 @@ import type { ChatMessage } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Send, LogOut, UserCircle } from 'lucide-react';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Send, LogOut, UserCircle, MessageCircleMore } from 'lucide-react';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 
 interface ChatAreaProps {
@@ -16,9 +17,11 @@ interface ChatAreaProps {
   disconnect: () => void;
   currentUserId: string;
   partnerId: string | null;
+  isPartnerTyping: boolean;
+  onUserTyping: () => void;
 }
 
-export function ChatArea({ messages, sendMessage, disconnect, currentUserId, partnerId }: ChatAreaProps) {
+export function ChatArea({ messages, sendMessage, disconnect, currentUserId, partnerId, isPartnerTyping, onUserTyping }: ChatAreaProps) {
   const [newMessage, setNewMessage] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
@@ -29,7 +32,7 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
         scrollViewport.scrollTop = scrollViewport.scrollHeight;
       }
     }
-  }, [messages]);
+  }, [messages, isPartnerTyping]); // Scroll on new message or typing status change
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,6 +46,11 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
     if (!id) return '?';
     return id.substring(0, 2).toUpperCase();
   }
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewMessage(e.target.value);
+    onUserTyping();
+  };
 
   return (
     <Card className="w-full max-w-2xl h-[70vh] flex flex-col shadow-xl rounded-lg">
@@ -95,6 +103,19 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
                 )}
               </div>
             ))}
+            {isPartnerTyping && (
+              <div className="flex items-center gap-2 justify-start">
+                 <Avatar className="w-8 h-8">
+                    <AvatarFallback className="bg-accent text-accent-foreground">
+                      {getInitials(partnerId)}
+                    </AvatarFallback>
+                  </Avatar>
+                <div className="flex items-center p-2.5 rounded-lg bg-secondary text-secondary-foreground rounded-bl-none shadow">
+                  <MessageCircleMore className="w-4 h-4 mr-2 animate-pulse" />
+                  <span className="text-sm italic">typing...</span>
+                </div>
+              </div>
+            )}
           </div>
         </ScrollArea>
       </CardContent>
@@ -104,11 +125,11 @@ export function ChatArea({ messages, sendMessage, disconnect, currentUserId, par
             type="text"
             placeholder="Type your message..."
             value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
+            onChange={handleInputChange}
             className="flex-grow"
             aria-label="Chat message input"
           />
-          <Button type="submit" size="icon" aria-label="Send message">
+          <Button type="submit" size="icon" aria-label="Send message" disabled={!newMessage.trim()}>
             <Send className="w-5 h-5" />
           </Button>
         </form>
