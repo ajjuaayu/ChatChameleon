@@ -21,23 +21,24 @@ interface ChatAreaProps {
   partnerAlias: string | null;
   isPartnerTyping: boolean;
   onUserTyping: () => void;
-  isChatActive: boolean; 
+  isChatActive: boolean;
 }
 
-export function ChatArea({ 
-  messages, 
-  sendMessage, 
-  disconnect, 
-  currentUserId, 
+export function ChatArea({
+  messages,
+  sendMessage,
+  disconnect,
+  currentUserId,
   currentUserAlias,
-  partnerId, 
+  partnerId,
   partnerAlias,
-  isPartnerTyping, 
+  isPartnerTyping,
   onUserTyping,
   isChatActive
 }: ChatAreaProps) {
   const [newMessage, setNewMessage] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null); // Ref for the input field
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -53,9 +54,10 @@ export function ChatArea({
     if (newMessage.trim() && isChatActive) {
       sendMessage(newMessage);
       setNewMessage('');
+      inputRef.current?.focus(); // Re-focus the input to keep keyboard open
     }
   };
-  
+
   const getInitials = (alias: string | null, id: string | null) => {
     if (alias) {
       return alias.substring(0, 2).toUpperCase();
@@ -77,7 +79,7 @@ export function ChatArea({
 
   return (
     <Card className="h-full w-full flex flex-col shadow-xl overflow-hidden sm:rounded-lg sm:max-w-3xl sm:mx-auto sm:my-4">
-      <CardHeader className="flex flex-row items-center justify-between p-2 sm:p-4 border-b shrink-0">
+      <CardHeader className="flex flex-row items-center justify-between p-4 border-b shrink-0">
         <div className="flex items-center gap-2 overflow-hidden"> {/* Added overflow-hidden for safety if name is too long */}
           <UserCircle className="w-8 h-8 text-primary shrink-0" />
           <CardTitle className="text-lg truncate" title={displayedPartnerName}>
@@ -89,7 +91,7 @@ export function ChatArea({
         </Button>
       </CardHeader>
       <CardContent className="flex-grow p-0 min-h-0"> {/* min-h-0 is crucial for flex-grow with scroll */}
-        <ScrollArea className="h-full p-2 sm:p-4" ref={scrollAreaRef}>
+        <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
           <div className="space-y-4">
             {messages.map((msg) => (
               <div
@@ -142,9 +144,10 @@ export function ChatArea({
           </div>
         </ScrollArea>
       </CardContent>
-      <CardFooter className="p-2 sm:p-4 border-t shrink-0">
+      <CardFooter className="p-4 border-t shrink-0">
         <form onSubmit={handleSendMessage} className="flex w-full items-center gap-2">
           <Input
+            ref={inputRef} // Assign the ref here
             type="text"
             placeholder={isChatActive ? "Type your message..." : "Chat ended"}
             value={newMessage}
