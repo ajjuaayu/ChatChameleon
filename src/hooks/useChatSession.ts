@@ -42,8 +42,8 @@ export function useChatSession() {
   const unsubscribeSessionRef = useRef<(() => void) | null>(null);
   const unsubscribeMessagesRef = useRef<(() => void) | null>(null);
   const activeSessionDbRefForDisconnect = useRef<DatabaseReference | null>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const userTypingRefForDisconnect = useRef<DatabaseReference | null>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const userAliasRefForConnect = useRef<string | null>(null);
 
 
@@ -52,14 +52,14 @@ export function useChatSession() {
   }, []);
 
   const setMyTypingStatus = useCallback(async (isTyping: boolean) => {
-    if (!currentSessionId || !userId) return;
+    if (!currentSessionId || !userId || connectionStatus !== 'connected') return;
     const typingRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}/typing_status/${userId}`);
     try {
       await set(typingRef, isTyping);
     } catch (e) {
       console.warn("Failed to set typing status:", e);
     }
-  }, [currentSessionId, userId]);
+  }, [currentSessionId, userId, connectionStatus]);
 
   const handleUserTyping = useCallback(() => {
     if (!currentSessionId || !userId || connectionStatus !== 'connected') return;
@@ -76,20 +76,26 @@ export function useChatSession() {
   }, [setMyTypingStatus, currentSessionId, userId, connectionStatus]);
 
 
-  const resetState = useCallback(() => {
+  const resetState = useCallback((isLeavingPartnerLeftState = false) => {
     if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
     if (unsubscribeMessagesRef.current) unsubscribeMessagesRef.current();
     unsubscribeSessionRef.current = null;
     unsubscribeMessagesRef.current = null;
 
-    if (activeSessionDbRefForDisconnect.current) {
+    // Only cancel Firebase onDisconnect if not already in 'partner_left' state,
+    // or if explicitly told to (e.g., when fully cleaning up after partner_left).
+    // When partner_left, we might have already cancelled it or don't want to interfere
+    // with the session record that indicates the partner left.
+    if (activeSessionDbRefForDisconnect.current && (!isLeavingPartnerLeftState || connectionStatus !== 'partner_left')) {
         onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel session onDisconnect in resetState:", err));
-        activeSessionDbRefForDisconnect.current = null; 
     }
-    if (userTypingRefForDisconnect.current) {
+    activeSessionDbRefForDisconnect.current = null; 
+    
+    if (userTypingRefForDisconnect.current && (!isLeavingPartnerLeftState || connectionStatus !== 'partner_left')) {
         onDisconnect(userTypingRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel typing onDisconnect in resetState:", err));
-        userTypingRefForDisconnect.current = null;
     }
+    userTypingRefForDisconnect.current = null;
+
     if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = null;
@@ -98,19 +104,18 @@ export function useChatSession() {
     setCurrentSessionId(null);
     setChatPartnerId(null);
     setMessages([]);
-    // Don't clear error here if we want to display a disconnect message
-    // setError(null); 
+    // setError(null); // Don't clear error if we want to display a disconnect message, handled by caller
     setIsConnecting(false);
     setIsPartnerTyping(false);
     setMyAlias(null); 
     setPartnerAlias(null); 
     userAliasRefForConnect.current = null;
-  }, []);
+  }, [connectionStatus]);
 
 
   const connectToRandomUser = useCallback(async () => {
     resetState(); 
-    setError(null); // Clear previous errors before new attempt
+    setError(null);
 
     if (!userId) {
       setError("User ID not available. Please refresh.");
@@ -155,7 +160,8 @@ export function useChatSession() {
                   user2Name: newGeneratedAlias, 
                   status: 'active',
                   updatedAt: serverTimestamp(),
-                  typing_status: { [userId]: false, [session.user1Id]: false } 
+                  typing_status: { [userId]: false, [session.user1Id]: false },
+                  closedBy: null,
                 });
                 setCurrentSessionId(sessionIdKey); 
                 sessionJoined = true;
@@ -184,6 +190,7 @@ export function useChatSession() {
           typing_status: { [userId]: false }, 
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
+          closedBy: null,
         };
 
         await set(newSessionRef, newSessionData);
@@ -200,16 +207,8 @@ export function useChatSession() {
 
   useEffect(() => {
     if (!currentSessionId || !userId) {
-      // If no current session, ensure we are idle and listeners are off.
-      // This path is also taken if setCurrentSessionId(null) is called elsewhere.
-      if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
-      if (unsubscribeMessagesRef.current) unsubscribeMessagesRef.current();
-      unsubscribeSessionRef.current = null;
-      unsubscribeMessagesRef.current = null;
-      // Connection status might have been set to 'error' or 'idle' by the caller of setCurrentSessionId(null)
-      // If not, default to idle.
-      if (connectionStatus !== 'error' && connectionStatus !== 'idle' && connectionStatus !== 'connecting') {
-        setConnectionStatus('idle');
+      if (connectionStatus !== 'partner_left' && connectionStatus !== 'error') {
+         setConnectionStatus('idle');
       }
       return;
     }
@@ -227,64 +226,75 @@ export function useChatSession() {
       setIsConnecting(false); 
 
       if (!snapshot.exists()) {
-        if (connectionStatus === 'connected') {
-           setError("Partner disconnected or session ended.");
-           setConnectionStatus('error'); 
-        } else if (connectionStatus === 'waiting') {
-           setConnectionStatus('idle'); // No error if waiting and session disappears
-        } else if (connectionStatus !== 'idle' && connectionStatus !== 'error') {
-           // If connecting or some other state, and session disappears, go idle.
-           setConnectionStatus('idle');
+        // This means the session was explicitly removed by the other user after they saw their partner left, or by this client.
+        if (connectionStatus !== 'idle' && connectionStatus !== 'partner_left') { // Avoid error if already handled or idle
+            setError("Chat session has ended.");
+            setConnectionStatus('error');
         }
-        setCurrentSessionId(null); // This triggers useEffect cleanup for the old session
+        // resetState might be called by the function that led to removal, or here if it's unexpected.
+        if (currentSessionId) setCurrentSessionId(null); 
         setChatPartnerId(null);
         setMessages([]);
-        setIsPartnerTyping(false);
         setPartnerAlias(null);
-        // Do NOT null out myAlias here to preserve it across disconnections if userAliasRefForConnect.current was set
         return;
       }
 
       const sessionData = snapshot.val() as ChatSession;
-      if (sessionData.status === 'closed') {
-        if (connectionStatus === 'connected') {
-           setError("Chat session has been closed by partner.");
-           setConnectionStatus('error');
-        } else {
-            setConnectionStatus('idle');
-        }
-        setCurrentSessionId(null); // Triggers useEffect cleanup
-        setChatPartnerId(null);
-        setMessages([]);
-        setIsPartnerTyping(false);
-        setPartnerAlias(null);
-        return;
-      }
-
-      const partner = sessionData.user1Id === userId ? sessionData.user2Id : sessionData.user1Id;
-      setChatPartnerId(partner);
+      
+      // Determine partner and aliases early
+      const currentPartnerId = sessionData.user1Id === userId ? sessionData.user2Id : sessionData.user1Id;
+      setChatPartnerId(currentPartnerId);
 
       if (sessionData.user1Id === userId) {
         setMyAlias(sessionData.user1Name || userAliasRefForConnect.current || 'You');
-        setPartnerAlias(sessionData.user2Name || (partner ? 'Stranger' : null));
+        setPartnerAlias(sessionData.user2Name || (currentPartnerId ? 'Stranger' : null));
       } else if (sessionData.user2Id === userId) {
         setMyAlias(sessionData.user2Name || userAliasRefForConnect.current || 'You');
-        setPartnerAlias(sessionData.user1Name || (partner ? 'Stranger' : null));
+        setPartnerAlias(sessionData.user1Name || (currentPartnerId ? 'Stranger' : null));
+      }
+      
+      if (sessionData.status === 'closed') {
+        if (sessionData.closedBy && sessionData.closedBy !== userId) {
+          setError( (partnerAlias || 'Your partner') + " has left the chat.");
+          setConnectionStatus('partner_left');
+          // Cancel our own onDisconnect that would mark as closed, as it's already closed by partner
+          if (activeSessionDbRefForDisconnect.current) {
+            onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(e => console.warn("Failed to cancel session onDisconnect for partner_left state", e));
+          }
+          if (userTypingRefForDisconnect.current) {
+             onDisconnect(userTypingRefForDisconnect.current).cancel().catch(e => console.warn("Failed to cancel typing onDisconnect for partner_left state", e));
+          }
+        } else if (sessionData.closedBy === userId && connectionStatus !== 'idle') {
+          // I closed it, and I'm not yet idle. Transition to idle.
+          // This happens if `disconnect()` was called.
+          // `disconnect()` will call `resetState` and set `idle` status itself.
+          // So this path is a fallback or confirmation.
+          // If disconnect() is working correctly, this specific branch might not be strictly needed
+          // as `disconnect()` handles its own transition.
+        } else if (!sessionData.closedBy && connectionStatus !== 'idle') { // Generic close or unexpected
+          setError("Chat session has been closed.");
+          setConnectionStatus('error');
+          setCurrentSessionId(null);
+        }
+        // Messages are kept for display in 'partner_left' state until user explicitly leaves.
+        // Typing status for partner is no longer relevant.
+        setIsPartnerTyping(false);
+        return; // Important: stop further processing if closed
       }
 
 
-      if (sessionData.status === 'active' && partner) {
+      if (sessionData.status === 'active' && currentPartnerId) {
         setConnectionStatus('connected');
-        setError(null); // Clear any previous errors like "waiting"
-        const partnerTyping = sessionData.typing_status && partner ? !!sessionData.typing_status[partner] : false;
+        setError(null); 
+        const partnerTyping = sessionData.typing_status && currentPartnerId ? !!sessionData.typing_status[currentPartnerId] : false;
         setIsPartnerTyping(partnerTyping);
       } else if (sessionData.status === 'waiting' && sessionData.user1Id === userId) {
         setConnectionStatus('waiting');
         setIsPartnerTyping(false);
         setPartnerAlias(null); 
-      } else if (sessionData.status === 'active' && !partner) {
+      } else if (sessionData.status === 'active' && !currentPartnerId) {
          console.warn("Session active but partner ID is missing. Reverting to waiting.");
-         setConnectionStatus('waiting'); // Or handle as an error/reset
+         setConnectionStatus('waiting'); 
          setIsPartnerTyping(false);
          setPartnerAlias(null); 
       }
@@ -293,7 +303,7 @@ export function useChatSession() {
         setError("Error in session: " + errorVal.message);
         setConnectionStatus('error');
         setIsConnecting(false);
-        setCurrentSessionId(null); // Triggers useEffect cleanup
+        setCurrentSessionId(null);
     });
     
     const messagesDbRefPath = `${SESSIONS_PATH}/${currentSessionId}/messages`;
@@ -312,38 +322,39 @@ export function useChatSession() {
     }, (errorVal) => {
         console.error("Error listening to messages:", errorVal);
         setError("Error loading messages: " + errorVal.message);
-        // Don't necessarily change connectionStatus here, could be transient
     });
 
-    // Safety net: if this client disconnects abruptly, Firebase removes the session
-    onDisconnect(currentSessionDbRef).remove().catch(err => console.error("Failed to set onDisconnect(remove) for session:", err));
-    // And clears their typing status
-    onDisconnect(currentUserTypingFirebaseRef).set(false).catch(err => console.warn("Failed to set onDisconnect for typing status:", err));
+    // If this client disconnects abruptly, Firebase updates session status
+    onDisconnect(currentSessionDbRef).update({ status: 'closed', closedBy: userId, updatedAt: serverTimestamp() })
+      .catch(err => console.error("Failed to set onDisconnect(update) for session:", err));
+    onDisconnect(currentUserTypingFirebaseRef).set(false)
+      .catch(err => console.warn("Failed to set onDisconnect for typing status:", err));
 
-    // Cleanup function for this effect (when currentSessionId or userId changes, or component unmounts)
     return () => {
       if (unsubscribeSessionRef.current) unsubscribeSessionRef.current();
       if (unsubscribeMessagesRef.current) unsubscribeMessagesRef.current();
       unsubscribeSessionRef.current = null;
       unsubscribeMessagesRef.current = null;
       
-      // Cancel the onDisconnect operations for THIS client for THIS session,
-      // as we are either moving to a new session, disconnecting cleanly, or unmounting.
-      // The server would have already executed them if this was an abrupt disconnect.
-      if (activeSessionDbRefForDisconnect.current) {
-        onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel session onDisconnect cleanup:", err));
-        activeSessionDbRefForDisconnect.current = null;
+      // Only cancel Firebase onDisconnect if not in 'partner_left' state,
+      // as it might have been cancelled already, or we want the update to fire if this cleanup is due to tab close.
+      if (connectionStatus !== 'partner_left') {
+        if (activeSessionDbRefForDisconnect.current) {
+          onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel session onDisconnect cleanup:", err));
+        }
+        if (userTypingRefForDisconnect.current) {
+          onDisconnect(userTypingRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel typing onDisconnect cleanup:", err));
+        }
       }
-      if (userTypingRefForDisconnect.current) {
-        onDisconnect(userTypingRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel typing onDisconnect cleanup:", err));
-        userTypingRefForDisconnect.current = null;
-      }
-       if (typingTimeoutRef.current) {
+      activeSessionDbRefForDisconnect.current = null;
+      userTypingRefForDisconnect.current = null;
+
+      if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = null;
       }
     };
-  }, [currentSessionId, userId, connectionStatus]); // Rerun if connectionStatus changes to handle transitions correctly.
+  }, [currentSessionId, userId, connectionStatus, partnerAlias]); // partnerAlias added to re-evaluate error message if it changes
 
 
   const sendMessage = useCallback(async (text: string) => {
@@ -365,56 +376,65 @@ export function useChatSession() {
     
     try {
         await set(newMessageRef, messageData);
-        const sessionUpdatedAtRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}/updatedAt`);
-        await set(sessionUpdatedAtRef, serverTimestamp());
+        const sessionRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}`);
+        await update(sessionRef, { updatedAt: serverTimestamp(), closedBy: null }); // Clear closedBy if chat resumes
     } catch(e : any) {
         console.error("Failed to send message:", e);
         setError("Failed to send message: " + e.message);
     }
   }, [currentSessionId, userId, setMyTypingStatus, connectionStatus]);
 
-  const disconnect = useCallback(async () => {
-    const sessionIdToDisconnect = currentSessionId; 
+  const disconnect = useCallback(async (isFinalCleanup = false) => {
+    const sessionIdToDisconnect = currentSessionId;
     
-    // Capture refs before resetState nulls them out
-    const sessionRefToCancel = activeSessionDbRefForDisconnect.current;
-    const typingRefToCancel = userTypingRefForDisconnect.current;
-
     if (sessionIdToDisconnect && userId) { 
         const userTypingFirebaseRef = ref(database, `${SESSIONS_PATH}/${sessionIdToDisconnect}/typing_status/${userId}`);
         try {
-            await set(userTypingFirebaseRef, false); // Explicitly set typing to false
+            await set(userTypingFirebaseRef, false); 
         } catch (e) {
-            console.warn("Could not set typing to false before disconnect", e)
+            console.warn("Could not set typing to false before disconnect", e);
         }
-        if (typingRefToCancel) { // Cancel the onDisconnect for typing
-            onDisconnect(typingRefToCancel).cancel().catch(e => console.warn("Failed to cancel typing onDisconnect during explicit disconnect", e));
+        if (userTypingRefForDisconnect.current) {
+            onDisconnect(userTypingRefForDisconnect.current).cancel().catch(e => console.warn("Failed to cancel typing onDisconnect during explicit disconnect", e));
         }
-    }
 
-    // Call resetState to clear local state and cancel general onDisconnects for the session
-    // resetState will handle cancelling onDisconnect for activeSessionDbRefForDisconnect.current
-    // This is slightly problematic if resetState is called before manual remove.
-    // Let's manually remove first, then call resetState.
-
-    if (sessionIdToDisconnect) {
-      const sessionToDisconnectRef = ref(database, `${SESSIONS_PATH}/${sessionIdToDisconnect}`);
-      try {
-        await remove(sessionToDisconnectRef); // Manually remove the session
-         if (sessionRefToCancel) { // Then cancel the onDisconnect for session removal
-            onDisconnect(sessionRefToCancel).cancel().catch(err => console.warn("Failed to cancel session onDisconnect after manual removal:", err));
+        const sessionToUpdateRef = ref(database, `${SESSIONS_PATH}/${sessionIdToDisconnect}`);
+        try {
+          if (!isFinalCleanup) { // Normal disconnect: mark as closed
+            await update(sessionToUpdateRef, { 
+              status: 'closed', 
+              closedBy: userId, 
+              updatedAt: serverTimestamp() 
+            });
+          } else { // Final cleanup: remove the session
+             await remove(sessionToUpdateRef);
+          }
+          if (activeSessionDbRefForDisconnect.current) {
+            onDisconnect(activeSessionDbRefForDisconnect.current).cancel().catch(err => console.warn("Failed to cancel session onDisconnect after manual update/removal:", err));
+          }
+        } catch (err: any) {
+          console.error("Error updating/removing session on explicit disconnect: ", err);
         }
-      } catch (err: any) {
-        console.error("Error removing session on explicit disconnect: ", err);
-        // If manual remove fails, the original onDisconnect().remove() will still be active as a fallback.
-      }
     }
     
-    resetState(); // Clears local state, and importantly, remaining onDisconnect refs are nulled out.
+    resetState(isFinalCleanup && connectionStatus === 'partner_left'); 
     setConnectionStatus('idle'); 
-    setError(null); // Clear any errors on explicit disconnect
+    setError(null);
+  }, [currentSessionId, userId, resetState, connectionStatus]);
 
-  }, [currentSessionId, userId, resetState]);
+  const leaveClosedChatAndGoIdle = useCallback(async () => {
+    if (currentSessionId) {
+      const sessionRef = ref(database, `${SESSIONS_PATH}/${currentSessionId}`);
+      try {
+        await remove(sessionRef); // Final removal of the session
+      } catch (e) {
+        console.error("Error removing session in leaveClosedChatAndGoIdle:", e);
+      }
+    }
+    resetState(true); // Pass true to indicate we are leaving the partner_left state
+    setConnectionStatus('idle');
+    setError(null);
+  }, [currentSessionId, resetState]);
   
   return {
     userId,
@@ -427,7 +447,8 @@ export function useChatSession() {
     isPartnerTyping,
     connectToRandomUser,
     sendMessage,
-    disconnect,
+    disconnect, // This is the user clicking "Disconnect" from an active chat
     handleUserTyping,
+    leaveClosedChatAndGoIdle, // This is for leaving after partner has already left
   };
 }

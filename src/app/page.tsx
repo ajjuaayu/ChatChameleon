@@ -4,24 +4,25 @@
 import { useChatSession } from '@/hooks/useChatSession';
 import { Button } from '@/components/ui/button';
 import { ChatArea } from '@/components/ChatArea';
-import { Loader2, Users, AlertTriangle, Smile } from 'lucide-react';
+import { Loader2, Users, AlertTriangle, Smile, UserX } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { ThemeToggleButton } from '@/components/ThemeToggleButton';
 
 export default function HomePage() {
   const {
     userId,
-    myAlias, // Changed from userName
+    myAlias, 
     messages,
     connectionStatus,
     chatPartnerId,
-    partnerAlias, // Changed from chatPartnerName
+    partnerAlias, 
     error,
     isPartnerTyping,
     connectToRandomUser,
     sendMessage,
     disconnect,
     handleUserTyping,
+    leaveClosedChatAndGoIdle,
   } = useChatSession();
 
   const renderContent = () => {
@@ -65,7 +66,7 @@ export default function HomePage() {
             <Loader2 className="w-12 h-12 animate-spin text-primary" />
             <p className="text-lg">Waiting for a partner...</p>
             {myAlias && <p className="text-sm text-muted-foreground">Your alias: {myAlias}</p>}
-            <Button variant="outline" onClick={disconnect}>Cancel</Button>
+            <Button variant="outline" onClick={() => disconnect(false)}>Cancel</Button> {/* disconnect(false) means normal disconnect */}
              <div className="absolute top-4 right-4">
               <ThemeToggleButton />
             </div>
@@ -80,28 +81,63 @@ export default function HomePage() {
             <ChatArea
               messages={messages}
               sendMessage={sendMessage}
-              disconnect={disconnect}
+              disconnect={() => disconnect(false)} // disconnect(false) means normal disconnect
               currentUserId={userId}
-              currentUserAlias={myAlias} // Pass current user's alias
+              currentUserAlias={myAlias} 
               partnerId={chatPartnerId}
-              partnerAlias={partnerAlias} // Pass partner's alias
+              partnerAlias={partnerAlias} 
               isPartnerTyping={isPartnerTyping}
               onUserTyping={handleUserTyping}
+              isChatActive={true}
             />
           </>
         );
+      case 'partner_left':
+        return (
+          <div className="flex flex-col items-center gap-4 text-foreground">
+             <div className="absolute top-4 right-4">
+              <ThemeToggleButton />
+            </div>
+            <UserX className="w-12 h-12 text-primary" />
+            <p className="text-lg">Chat Ended</p>
+            {error && <p className="text-sm text-muted-foreground">{error}</p>}
+            <Button onClick={async () => {
+              await leaveClosedChatAndGoIdle(); 
+              connectToRandomUser();
+            }} variant="default" size="lg">
+              Find New Chat
+            </Button>
+             <Button onClick={async () => {
+              await leaveClosedChatAndGoIdle();
+            }} variant="outline">
+              Go Home
+            </Button>
+          </div>
+        );
       case 'error':
+        const isDisconnectionError = error && (error.toLowerCase().includes("disconnected") || error.toLowerCase().includes("session ended") || error.toLowerCase().includes("closed"));
         return (
           <div className="flex flex-col items-center gap-4 text-destructive">
              <div className="absolute top-4 right-4">
               <ThemeToggleButton />
             </div>
-            <AlertTriangle className="w-12 h-12" />
-            <p className="text-lg">Oops! Something went wrong.</p>
+            {isDisconnectionError ? <UserX className="w-12 h-12" /> : <AlertTriangle className="w-12 h-12" />}
+            <p className="text-lg">{isDisconnectionError ? "Chat Ended" : "Oops! Something went wrong."}</p>
             {error && <p className="text-sm">{error}</p>}
-            <Button onClick={() => window.location.reload()} variant="outline">
-              Try Again
+            <Button onClick={() => {
+              if (isDisconnectionError) {
+                leaveClosedChatAndGoIdle().then(() => connectToRandomUser());
+              } else {
+                window.location.reload();
+              }
+            }} variant="outline">
+              {isDisconnectionError ? "Find New Chat" : "Try Again"}
             </Button>
+            {isDisconnectionError && (
+               <Button onClick={leaveClosedChatAndGoIdle} variant="ghost">
+                Go Home
+              </Button>
+            )}
           </div>
         );
       default:
@@ -109,8 +145,12 @@ export default function HomePage() {
     }
   };
 
+  const mainContainerClasses = connectionStatus === 'connected' || connectionStatus === 'partner_left'
+    ? 'h-screen p-0 sm:p-4'
+    : 'min-h-screen p-4 justify-center';
+
   return (
-    <main className={`relative flex flex-col items-center ${connectionStatus === 'connected' ? 'h-screen p-0 sm:p-4' : 'min-h-screen p-4 justify-center'}`}>
+    <main className={`relative flex flex-col items-center ${mainContainerClasses}`}>
       {renderContent()}
     </main>
   );

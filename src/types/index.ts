@@ -18,6 +18,7 @@ export interface ChatSession {
   updatedAt: number | object;
   user1Name?: string;
   user2Name?: string;
+  closedBy?: string | null; // ID of the user who initiated the close
 }
 
-export type ConnectionStatus = 'idle' | 'connecting' | 'waiting' | 'connected' | 'error';
+export type ConnectionStatus = 'idle' | 'connecting' | 'waiting' | 'connected' | 'error' | 'partner_left';

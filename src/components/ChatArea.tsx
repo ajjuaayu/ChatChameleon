@@ -21,6 +21,7 @@ interface ChatAreaProps {
   partnerAlias: string | null;
   isPartnerTyping: boolean;
   onUserTyping: () => void;
+  isChatActive: boolean; // To disable input if partner left, etc.
 }
 
 export function ChatArea({ 
@@ -32,7 +33,8 @@ export function ChatArea({
   partnerId, 
   partnerAlias,
   isPartnerTyping, 
-  onUserTyping 
+  onUserTyping,
+  isChatActive
 }: ChatAreaProps) {
   const [newMessage, setNewMessage] = useState('');
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -48,7 +50,7 @@ export function ChatArea({
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (newMessage.trim()) {
+    if (newMessage.trim() && isChatActive) {
       sendMessage(newMessage);
       setNewMessage('');
     }
@@ -66,7 +68,9 @@ export function ChatArea({
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewMessage(e.target.value);
-    onUserTyping();
+    if (isChatActive) {
+      onUserTyping();
+    }
   };
 
   const displayedPartnerName = partnerAlias || (partnerId ? `User ${partnerId.slice(-4)}` : 'Stranger');
@@ -80,7 +84,7 @@ export function ChatArea({
             Chatting with {displayedPartnerName}
           </CardTitle>
         </div>
-        <Button variant="ghost" size="icon" onClick={disconnect} aria-label="Disconnect chat">
+        <Button variant="ghost" size="icon" onClick={disconnect} aria-label="Disconnect chat" disabled={!isChatActive}>
           <LogOut className="w-5 h-5 text-destructive" />
         </Button>
       </CardHeader>
@@ -122,7 +126,7 @@ export function ChatArea({
                 )}
               </div>
             ))}
-            {isPartnerTyping && (
+            {isPartnerTyping && isChatActive && (
               <div className="flex items-center gap-2 justify-start">
                  <Avatar className="w-8 h-8">
                     <AvatarFallback className="bg-accent text-accent-foreground">
@@ -142,13 +146,14 @@ export function ChatArea({
         <form onSubmit={handleSendMessage} className="flex w-full items-center gap-2">
           <Input
             type="text"
-            placeholder="Type your message..."
+            placeholder={isChatActive ? "Type your message..." : "Chat ended"}
             value={newMessage}
             onChange={handleInputChange}
             className="flex-grow"
             aria-label="Chat message input"
+            disabled={!isChatActive}
           />
-          <Button type="submit" size="icon" aria-label="Send message" disabled={!newMessage.trim()}>
+          <Button type="submit" size="icon" aria-label="Send message" disabled={!newMessage.trim() || !isChatActive}>
             <Send className="w-5 h-5" />
           </Button>
         </form>
