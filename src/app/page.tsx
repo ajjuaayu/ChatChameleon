@@ -11,14 +11,14 @@ import { ThemeToggleButton } from '@/components/ThemeToggleButton';
 export default function HomePage() {
   const {
     userId,
-    myAlias, 
+    myAlias,
     messages,
     connectionStatus,
     chatPartnerId,
-    partnerAlias, 
+    partnerAlias,
     error,
     isPartnerTyping,
-    isConnecting, // Added this
+    isConnecting,
     connectToRandomUser,
     sendMessage,
     disconnect,
@@ -27,7 +27,7 @@ export default function HomePage() {
   } = useChatSession();
 
   const renderContent = () => {
-    if (isConnecting && connectionStatus === 'connecting') { // Show connecting spinner immediately
+    if (isConnecting && connectionStatus === 'connecting') {
       return (
         <div className="flex flex-col items-center gap-2 text-lg">
           <Loader2 className="w-12 h-12 animate-spin text-primary" />
@@ -52,11 +52,11 @@ export default function HomePage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col items-center gap-4">
-                <Button 
-                  onClick={connectToRandomUser} 
-                  size="lg" 
+                <Button
+                  onClick={connectToRandomUser}
+                  size="lg"
                   className="w-full"
-                  disabled={isConnecting} // Disable button while connecting
+                  disabled={isConnecting}
                 >
                   {isConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Connect to a Stranger
@@ -70,7 +70,7 @@ export default function HomePage() {
             </Card>
           </div>
         );
-      case 'connecting': // This state might be brief if isConnecting covers it
+      case 'connecting':
         return (
           <div className="flex flex-col items-center gap-2 text-lg">
             <Loader2 className="w-12 h-12 animate-spin text-primary" />
@@ -93,17 +93,17 @@ export default function HomePage() {
       case 'connected':
         return (
           <>
-            <div className="absolute top-4 right-4 z-50"> 
+            <div className="absolute top-4 right-4 z-50">
               <ThemeToggleButton />
             </div>
             <ChatArea
               messages={messages}
               sendMessage={sendMessage}
-              disconnect={() => disconnect()} 
+              disconnect={() => disconnect()}
               currentUserId={userId}
-              currentUserAlias={myAlias} 
+              currentUserAlias={myAlias}
               partnerId={chatPartnerId}
-              partnerAlias={partnerAlias} 
+              partnerAlias={partnerAlias}
               isPartnerTyping={isPartnerTyping}
               onUserTyping={handleUserTyping}
               isChatActive={true}
@@ -121,7 +121,7 @@ export default function HomePage() {
             <p className="text-muted-foreground">{error || (partnerAlias || 'Your partner') + " has left the chat."}</p>
             <div className="flex gap-3 mt-4">
               <Button onClick={async () => {
-                await leaveClosedChatAndGoIdle(); 
+                await leaveClosedChatAndGoIdle();
                 connectToRandomUser();
               }} variant="default" size="lg">
                 Find New Chat
@@ -144,10 +144,10 @@ export default function HomePage() {
             {error && <p className="text-center max-w-sm">{error}</p>}
             <div className="flex gap-3 mt-4">
             <Button onClick={() => {
-              if (isDisconnectionError || error?.includes("Connection error")) { // If it's a specific known disconnect or initial connection error
-                leaveClosedChatAndGoIdle().then(() => connectToRandomUser()); // Try to start fresh
+              if (isDisconnectionError || error?.includes("Connection error")) {
+                leaveClosedChatAndGoIdle().then(() => connectToRandomUser());
               } else {
-                window.location.reload(); // Generic error, try reload
+                window.location.reload();
               }
             }} variant="outline" size="lg">
               {isDisconnectionError || error?.includes("Connection error") ? "Find New Chat" : "Try Again"}
@@ -165,16 +165,16 @@ export default function HomePage() {
     }
   };
 
-  const mainContainerClasses = 
-    connectionStatus === 'connected' 
-    ? 'h-screen p-0 sm:p-4' 
+  const mainContainerClasses =
+    connectionStatus === 'connected'
+    ? 'h-screen p-0 sm:p-4' // ChatArea itself will handle its max-width and centering if needed
     : (connectionStatus === 'partner_left' || connectionStatus === 'error')
-    ? 'min-h-screen p-4 flex flex-col justify-center' // Centering for partner_left and error
+    ? 'min-h-screen p-4 flex flex-col justify-center'
     : 'min-h-screen p-4 justify-center';
 
 
   return (
-    <main className={`relative flex flex-col items-center ${mainContainerClasses}`}>
+    <main className={`relative flex flex-col ${connectionStatus !== 'connected' ? 'items-center' : ''} ${mainContainerClasses}`}>
       {renderContent()}
     </main>
   );
