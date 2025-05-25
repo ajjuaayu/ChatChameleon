@@ -29,7 +29,7 @@ export default function HomePage() {
   const renderContent = () => {
     if (isConnecting && connectionStatus === 'connecting') {
       return (
-        <div className="flex flex-col items-center gap-2 text-lg">
+        <div className="flex flex-col items-center justify-center flex-grow gap-2 text-lg">
           <Loader2 className="w-12 h-12 animate-spin text-primary" />
           <p>Connecting as {myAlias || 'Anonymous'}...</p>
            <div className="absolute top-4 right-4"> <ThemeToggleButton /></div>
@@ -40,7 +40,7 @@ export default function HomePage() {
     switch (connectionStatus) {
       case 'idle':
         return (
-          <div className="flex flex-col items-center gap-6">
+          <div className="flex flex-col items-center justify-center flex-grow gap-6 p-4">
             <Card className="w-full max-w-md text-center shadow-lg">
               <CardHeader>
                 <div className="mx-auto mb-4 p-3 bg-primary/10 rounded-full w-fit">
@@ -72,7 +72,7 @@ export default function HomePage() {
         );
       case 'connecting':
         return (
-          <div className="flex flex-col items-center gap-2 text-lg">
+          <div className="flex flex-col items-center justify-center flex-grow gap-2 text-lg">
             <Loader2 className="w-12 h-12 animate-spin text-primary" />
             <p>Connecting as {myAlias || 'Anonymous'}...</p>
             <div className="absolute top-4 right-4"> <ThemeToggleButton /></div>
@@ -80,7 +80,7 @@ export default function HomePage() {
         );
       case 'waiting':
         return (
-          <div className="flex flex-col items-center gap-4">
+          <div className="flex flex-col items-center justify-center flex-grow gap-4 p-4">
             <Loader2 className="w-12 h-12 animate-spin text-primary" />
             <p className="text-lg">Waiting for a partner...</p>
             {myAlias && <p className="text-sm text-muted-foreground">Your alias: {myAlias}</p>}
@@ -112,7 +112,7 @@ export default function HomePage() {
         );
       case 'partner_left':
         return (
-          <div className="flex flex-col items-center gap-4 text-foreground">
+          <div className="flex flex-col items-center justify-center flex-grow gap-4 p-4 text-foreground">
              <div className="absolute top-4 right-4">
               <ThemeToggleButton />
             </div>
@@ -135,7 +135,7 @@ export default function HomePage() {
       case 'error':
         const isDisconnectionError = error && (error.toLowerCase().includes("disconnected") || error.toLowerCase().includes("session ended") || error.toLowerCase().includes("closed by") || error.toLowerCase().includes("no longer exists"));
         return (
-          <div className="flex flex-col items-center gap-4 text-destructive">
+          <div className="flex flex-col items-center justify-center flex-grow gap-4 p-4 text-destructive">
              <div className="absolute top-4 right-4">
               <ThemeToggleButton />
             </div>
@@ -165,16 +165,17 @@ export default function HomePage() {
     }
   };
 
-  const mainContainerClasses =
-    connectionStatus === 'connected'
-    ? 'h-screen p-0 sm:p-4' // ChatArea itself will handle its max-width and centering if needed
-    : (connectionStatus === 'partner_left' || connectionStatus === 'error')
-    ? 'min-h-screen p-4 flex flex-col justify-center'
-    : 'min-h-screen p-4 justify-center';
-
+  let mainClasses = "relative flex flex-col";
+  if (connectionStatus === 'connected') {
+    // Strict viewport fitting for connected state, ChatArea will handle its own constraints/padding
+    mainClasses += " h-screen w-screen overflow-hidden"; 
+  } else {
+    // For other states, center content within at least screen height
+    mainClasses += " min-h-screen items-center justify-center";
+  }
 
   return (
-    <main className={`relative flex flex-col ${connectionStatus !== 'connected' ? 'items-center' : ''} ${mainContainerClasses}`}>
+    <main className={mainClasses}>
       {renderContent()}
     </main>
   );

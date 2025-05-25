@@ -21,7 +21,7 @@ interface ChatAreaProps {
   partnerAlias: string | null;
   isPartnerTyping: boolean;
   onUserTyping: () => void;
-  isChatActive: boolean; // To disable input if partner left, etc.
+  isChatActive: boolean; 
 }
 
 export function ChatArea({ 
@@ -76,19 +76,19 @@ export function ChatArea({
   const displayedPartnerName = partnerAlias || (partnerId ? `User ${partnerId.slice(-4)}` : 'Stranger');
 
   return (
-    <Card className="w-full sm:max-w-3xl flex-grow flex flex-col shadow-xl sm:rounded-lg overflow-hidden">
-      <CardHeader className="flex flex-row items-center justify-between p-4 border-b">
-        <div className="flex items-center gap-2">
-          <UserCircle className="w-8 h-8 text-primary" />
+    <Card className="h-full w-full flex flex-col shadow-xl overflow-hidden sm:rounded-lg sm:max-w-3xl sm:mx-auto sm:my-4">
+      <CardHeader className="flex flex-row items-center justify-between p-4 border-b shrink-0">
+        <div className="flex items-center gap-2 overflow-hidden"> {/* Added overflow-hidden for safety if name is too long */}
+          <UserCircle className="w-8 h-8 text-primary shrink-0" />
           <CardTitle className="text-lg truncate" title={displayedPartnerName}>
             Chatting with {displayedPartnerName}
           </CardTitle>
         </div>
-        <Button variant="ghost" size="icon" onClick={disconnect} aria-label="Disconnect chat" disabled={!isChatActive}>
+        <Button variant="ghost" size="icon" onClick={disconnect} aria-label="Disconnect chat" disabled={!isChatActive} className="shrink-0">
           <LogOut className="w-5 h-5 text-destructive" />
         </Button>
       </CardHeader>
-      <CardContent className="flex-grow p-0 min-h-0">
+      <CardContent className="flex-grow p-0 min-h-0"> {/* min-h-0 is crucial for flex-grow with scroll */}
         <ScrollArea className="h-full p-4" ref={scrollAreaRef}>
           <div className="space-y-4">
             {messages.map((msg) => (
@@ -99,7 +99,7 @@ export function ChatArea({
                 }`}
               >
                 {msg.senderId !== currentUserId && (
-                  <Avatar className="w-8 h-8">
+                  <Avatar className="w-8 h-8 shrink-0">
                     <AvatarFallback className="bg-accent text-accent-foreground">
                       {getInitials(partnerAlias, msg.senderId)}
                     </AvatarFallback>
@@ -113,12 +113,12 @@ export function ChatArea({
                   }`}
                 >
                   <p className="text-sm break-words">{msg.text}</p>
-                  <p className={`text-xs mt-1 ${msg.senderId === currentUserId ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                  <p className={`text-xs mt-1 ${msg.senderId === currentUserId ? 'text-primary-foreground/80' : 'text-muted-foreground/80'}`}>
                      {new Date(typeof msg.timestamp === 'number' ? msg.timestamp : Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 </div>
                 {msg.senderId === currentUserId && (
-                  <Avatar className="w-8 h-8">
+                  <Avatar className="w-8 h-8 shrink-0">
                      <AvatarFallback className="bg-muted text-muted-foreground">
                       {getInitials(currentUserAlias, currentUserId)}
                     </AvatarFallback>
@@ -128,7 +128,7 @@ export function ChatArea({
             ))}
             {isPartnerTyping && isChatActive && (
               <div className="flex items-center gap-2 justify-start">
-                 <Avatar className="w-8 h-8">
+                 <Avatar className="w-8 h-8 shrink-0">
                     <AvatarFallback className="bg-accent text-accent-foreground">
                       {getInitials(partnerAlias, partnerId)}
                     </AvatarFallback>
@@ -142,7 +142,7 @@ export function ChatArea({
           </div>
         </ScrollArea>
       </CardContent>
-      <CardFooter className="p-4 border-t">
+      <CardFooter className="p-4 border-t shrink-0">
         <form onSubmit={handleSendMessage} className="flex w-full items-center gap-2">
           <Input
             type="text"
@@ -153,7 +153,7 @@ export function ChatArea({
             aria-label="Chat message input"
             disabled={!isChatActive}
           />
-          <Button type="submit" size="icon" aria-label="Send message" disabled={!newMessage.trim() || !isChatActive}>
+          <Button type="submit" size="icon" aria-label="Send message" disabled={!newMessage.trim() || !isChatActive} className="shrink-0">
             <Send className="w-5 h-5" />
           </Button>
         </form>
